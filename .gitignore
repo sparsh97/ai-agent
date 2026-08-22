@@ -10,3 +10,20 @@ wheels/
 .venv
 .jj/
 .env
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Testing / caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Knowledge base data (documents you feed the agent, and the search index built from them)
+data/
+*.pdf
+faiss_index/
+*.index
