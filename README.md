@@ -1,4 +1,6 @@
-# AI Agent
+# AI Agent (Learning Project)
+
+> 📚 **This is a personal learning project**, built to learn how AI agents, LangGraph, and Retrieval-Augmented Generation (RAG) work. It's not production software — code, structure, and docs are all still evolving as I learn.
 
 A conversational AI agent built with [LangGraph](https://langchain-ai.github.io/langgraph/) and Google's Gemini model, with support for answering questions from your own documents (a "knowledge base").
 
