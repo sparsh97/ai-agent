@@ -1,20 +1,36 @@
 # AI Agent
 
-A simple conversational AI agent built with [LangGraph](https://langchain-ai.github.io/langgraph/) and Google's Gemini model.
+A conversational AI agent built with [LangGraph](https://langchain-ai.github.io/langgraph/) and Google's Gemini model, with support for answering questions from your own documents (a "knowledge base").
 
 ## What this project does (so far)
 
-Right now the project is a basic chatbot that runs in your terminal:
+There are two agents and a knowledge base pipeline:
 
-- You type a message.
-- It's sent to Google's Gemini AI model, along with a short set of instructions (a "system prompt") telling the AI how to behave — be clear, admit when it doesn't know something, ask for clarification when needed, etc.
-- The AI's reply is shown back to you, and the conversation keeps going until you type `quit` or `exit`.
+### 1. `agent.py` — basic chatbot
+A simple terminal chatbot: you type a message, it's sent to Gemini along with a system prompt telling it how to behave (be clear, admit when it doesn't know something, etc.), and the reply is printed back. Conversation continues until you type `quit` or `exit`.
 
-Under the hood, this is built using **LangGraph**, a library for organizing an AI agent's logic as a flowchart (a "graph") of steps ("nodes") connected by arrows ("edges"). Right now the flowchart is intentionally simple — one step in, one step out — but it's structured so more steps can be added later. See the comments in [agent.py](agent.py) for a plain-language explanation of these concepts (graph, state, node, etc.).
+### 2. `knowledge_base.py` — build a searchable knowledge base from a PDF
+This is a one-time (or run-when-updated) script that prepares a document so an AI agent can search it later. It:
+
+1. **Loads** a PDF (`vpn_user_guide.pdf`) into a list of documents (one per page).
+2. **Splits** each document into small **chunks** of text (~1000 characters, with some overlap so ideas don't get cut in half).
+3. **Embeds** each chunk — turns it into a list of numbers (an "embedding") that captures its meaning, using Google's `models/gemini-embedding-001` model — so chunks can be searched by meaning, not just keyword matching.
+4. **Stores** all the chunks and their embeddings in a **FAISS vector store**, saved locally to the `faiss_index/` folder, so it can be searched instantly without redoing the above steps every time.
+
+See the comments in [knowledge_base.py](knowledge_base.py) for a plain-language explanation of documents, chunks, embeddings, and vector stores.
+
+### 3. `tech_support.py` — VPN support agent that uses the knowledge base
+A more advanced version of the chatbot, built for Acme Corp IT support. Instead of only relying on what the AI model already knows, it can **search the knowledge base** (the `faiss_index/` built by `knowledge_base.py`) for real answers from the VPN user guide. It:
+
+- Loads the saved `faiss_index/` vector store and wraps it as a **retriever tool** (`search_vpn_knowledge_base`) the AI can call.
+- Uses a LangGraph flowchart with an extra step: the chatbot node can decide to call the search tool, get results back, and then reply — instead of always answering in one shot. This loop (`chatbot -> tools -> chatbot`) is what lets the agent "look things up" before responding.
+- Only answers VPN-related questions, per its system prompt.
 
 ## Project structure
 
-- [agent.py](agent.py) — the chatbot agent: builds the LangGraph flowchart and runs the terminal chat loop.
+- [agent.py](agent.py) — basic chatbot: builds a simple LangGraph flowchart and runs the terminal chat loop.
+- [tech_support.py](tech_support.py) — VPN support agent that searches the knowledge base via a retriever tool before answering.
+- [knowledge_base.py](knowledge_base.py) — builds the searchable knowledge base (`faiss_index/`) from a PDF document.
 - [src/ai_agent/](src/ai_agent/) — the installable Python package for this project (currently a placeholder, to be built out).
 - [pyproject.toml](pyproject.toml) — project dependencies, managed with [uv](https://github.com/astral-sh/uv).
 
@@ -28,11 +44,16 @@ Under the hood, this is built using **LangGraph**, a library for organizing an A
    ```
    GOOGLE_API_KEY=your-key-here
    ```
-3. Run the agent:
+3. Run the basic chatbot:
    ```
-   python agent.py
+   uv run agent.py
+   ```
+4. To use the VPN support agent, first build the knowledge base (place a `vpn_user_guide.pdf` in the project root), then run the agent:
+   ```
+   uv run knowledge_base.py
+   uv run tech_support.py
    ```
 
 ## What's coming next
 
-The project already includes dependencies for document loading and search (`pypdf`, `langchain-text-splitters`, `faiss-cpu`), which will be used to add a **knowledge base**: the ability for the agent to look up information from your own documents instead of relying only on what the AI model already knows. This is currently in progress.
+Further knowledge-base improvements (e.g. supporting more documents, refining retrieval) are expected as this project continues to grow.

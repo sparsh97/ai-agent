@@ -4,143 +4,77 @@ from langgraph.graph import StateGraph, START, END
 from langchain_core.messages import SystemMessage
 from langgraph.graph import MessagesState
 
+from langchain_google_genai import GoogleGenerativeAIEmbeddings
+from langchain_community.vectorstores import FAISS
+from langchain_core.tools.retriever import create_retriever_tool
+from langgraph.prebuilt import ToolNode, tools_condition
+
 
 load_dotenv()
 
 llm=ChatGoogleGenerativeAI(model="gemini-3.6-flash")
 
+# --------------------------------------------------------------------------
+# WHAT'S DIFFERENT ABOUT THIS AGENT vs. agent.py?
+# agent.py can only answer from what the AI model already knows.
+# This agent can instead look things up in Acme Corp's own VPN guide by
+# using a "tool" — the AI decides when it needs to search, calls the
+# search tool, reads the results, and then answers using that info.
+# This is often called "RAG" (Retrieval-Augmented Generation).
+# --------------------------------------------------------------------------
+
+# Re-create the SAME embeddings model used in knowledge_base.py. This is
+# needed to turn a user's question into a number-list (embedding) that
+# can be compared against the chunks already stored in the vector store.
+# It must match the model used when the vector store was built.
+embeddings = GoogleGenerativeAIEmbeddings(model="models/gemini-embedding-001")
+
+# Load the vector store we built and saved earlier (see knowledge_base.py)
+# back from disk, instead of rebuilding it from the PDF every time.
+vectorstore = FAISS.load_local('faiss_index', embeddings, allow_dangerous_deserialization=True)
+
+# A "RETRIEVER" is just the vector store wrapped so it can be asked
+# "give me the most relevant chunks for this text." search_kwargs={"k": 4}
+# means: return the 4 most relevant chunks for whatever question is asked.
+retriver = vectorstore.as_retriever(search_kwargs={"k": 4})
+
+# A "TOOL" is a function the AI model is allowed to call by itself when
+# it decides it needs to, rather than us calling it in code directly.
+# create_retriever_tool packages our retriever into a tool named
+# "search_vpn_knowledge_base", with a description that tells the AI
+# model what the tool is for and when to use it (the AI reads this
+# description to decide whether calling it makes sense).
+kb_tool = create_retriever_tool(
+    retriver,
+    name="search_vpn_knowledge_base",
+    description=("Search Acme Corp's internal VPN user guide for installation steps, troubleshooting, and configuration details."),
+)
+
+# bind_tools tells the AI model "here are the tools you're allowed to
+# use." From now on, when we call llm_with_locals, the model can either
+# reply normally with text, OR reply by asking to call kb_tool — we then
+# run that tool and hand the results back to it (see the graph below).
+llm_with_locals = llm.bind_tools([kb_tool])
+
 SYSTEM_PROMPT = '''
-You are a helpful IT Support Assistant for Acme Corp.
-
-Your ONLY responsibility is to assist employees with VPN-related issues.
-
-Always respond professionally, politely, and provide step-by-step guidance whenever appropriate.
-
-==================================================
-ACME CORP VPN KNOWLEDGE BASE
-==================================================
-
-GENERAL INFORMATION
--------------------
-Acme Corp employees use the Acme Secure VPN to securely access internal company resources while working remotely.
-
-VPN SERVER
-----------
-Server Address:
-vpn.acme-corp.com
-
-VPN INSTALLATION
-----------------
-1. Download the VPN client from the company portal.
-2. Install the VPN application.
-3. Launch the application.
-4. Sign in using your company email address.
-5. Enter the server address:
-   vpn.acme-corp.com
-6. Complete Multi-Factor Authentication (MFA) using the Acme Authenticator app.
-7. Once connected, verify that the VPN status shows "Connected".
-
-LOGIN REQUIREMENTS
-------------------
-- Company email address
-- Company password
-- Multi-Factor Authentication (MFA)
-
-COMMON VPN ISSUES
------------------
-
-Issue: Connection Failed
-Possible Solutions:
-- Verify your internet connection.
-- Restart your Wi-Fi router.
-- Try another network or a mobile hotspot.
-- Restart the VPN client.
-- Restart your computer.
-- Ensure the VPN server address is correct.
-
-Issue: Authentication Failed
-Possible Solutions:
-- Verify your username and password.
-- Complete the MFA request.
-- Ensure your account is not locked.
-- Reset your password if necessary.
-- Contact the IT Helpdesk if the problem continues.
-
-Issue: VPN Disconnects Frequently
-Possible Solutions:
-- Check your internet stability.
-- Move closer to your Wi-Fi router.
-- Use a wired connection if available.
-- Close applications consuming excessive bandwidth.
-- Restart the VPN client.
-
-Issue: Unable to Reach Company Applications
-Possible Solutions:
-- Confirm the VPN status shows "Connected".
-- Disconnect and reconnect the VPN.
-- Restart the affected application.
-- Restart your computer.
-
-Issue: Slow VPN Performance
-Possible Solutions:
-- Close unnecessary downloads or streaming applications.
-- Switch to a faster internet connection.
-- Restart the VPN client.
-- Test your internet speed.
-
-FREQUENTLY ASKED QUESTIONS
---------------------------
-
-Q: Do I need VPN while working from home?
-A: Yes, VPN is required to access internal company systems securely.
-
-Q: Can I use VPN while traveling?
-A: Yes, provided you have internet access and complete MFA.
-
-Q: Can I connect from multiple devices?
-A: Only one active VPN session is allowed per employee.
-
-Q: I forgot my VPN password.
-A: Reset your company password using the password reset portal or contact the IT Helpdesk.
-
-Q: VPN says "Already Connected".
-A: Disconnect the existing session before attempting to reconnect.
-
-SUPPORT INFORMATION
--------------------
-IT Helpdesk:
-1800-123-4567
-
-Support Portal:
-support.acme-corp.com
-
-Support Hours:
-Monday to Friday
-9:00 AM – 6:00 PM
-
-==================================================
-RESPONSE RULES
-==================================================
-
-1. Answer ONLY VPN-related questions.
-
-2. Use the information in this knowledge base whenever possible.
-
-3. If the answer is not available in this knowledge base, politely say you do not have enough information.
-
-4. If the user asks about anything unrelated to VPNs (for example laptops, printers, email, mobile phones, or general technology), DO NOT answer the question. Reply exactly with:
-
-"Sorry, I can only assist with VPN-related issues. Please ask me a question about your VPN."
-
-5. Keep responses concise, professional, and easy for non-technical users to follow.
-
-6. When troubleshooting, provide step-by-step instructions instead of listing every possible solution at once.
-
+ou are a helpful IT support assistant for Acme Corp. \
+You assist employees with VPN-related issues.
+You have access to Acme Corp's internal VPN Knowledge Base through the \
+search_vpn_knowledge_base tool - use it to find accurate, relevant answers \
+to employee questions about installation, troubleshooting, or configuration.
+Always respond clearly and politely.
+Do not offer solutions unrelated to VPN.
 '''
 
+# This is the "chatbot" step of our flowchart. Same idea as agent.py:
+# add the hidden instructions, ask the AI for a reply, and pass that
+# reply along. The difference is llm_with_locals may reply with a
+# request to use the search tool instead of a plain text answer — the
+# graph below (see add_conditional_edges) is what checks for that and
+# routes to the "tools" step when it happens.
 def chat_bot(state: MessagesState):
     messages = [SystemMessage(content=SYSTEM_PROMPT)] + state["messages"]
-    response = llm.invoke(messages)
+    response = llm_with_locals.invoke(messages)
     return {'messages': [response]}
 
 
@@ -157,10 +91,29 @@ def extract_text(content):
         )
     return str(content)
 
+# This flowchart has two steps now instead of one, so the agent can
+# loop back and forth between "thinking/replying" and "searching":
+#   - "chatbot": the AI thinking/replying step (defined above).
+#   - "tools": a built-in LangGraph step (ToolNode) that actually runs
+#     whichever tool the AI asked for (here, kb_tool) and hands the
+#     search results back into the conversation.
+#
+# add_conditional_edges("chatbot", tools_condition) is the key part:
+# after "chatbot" runs, tools_condition looks at the AI's reply and
+# decides where to go next —
+#   - if the AI asked to use a tool, go to "tools"
+#   - otherwise, the AI gave a final answer, so go to END
+#
+# add_edge("tools", "chatbot") sends the search results back to the
+# chatbot step, so the AI can read them and give a proper answer. This
+# creates a loop: chatbot -> tools -> chatbot -> ... -> END, letting the
+# AI search as many times as it needs before replying.
 graph_builder = StateGraph(MessagesState)
 graph_builder.add_node("chatbot", chat_bot)
+graph_builder.add_node("tools", ToolNode(tools=[kb_tool]))
 graph_builder.add_edge(START, "chatbot")
-graph_builder.add_edge("chatbot", END)
+graph_builder.add_conditional_edges("chatbot", tools_condition)
+graph_builder.add_edge("tools", "chatbot")
 agent = graph_builder.compile()
 
 
